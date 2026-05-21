@@ -1,0 +1,2 @@
+[console_scripts]
+flight-price = flight_price.cli:main

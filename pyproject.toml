@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flight-price"
+version = "0.4.0"
+description = "Query Trip.com for bookable flight prices across a date range. Designed for AI agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "daghlny" }]
+keywords = ["flight", "price", "trip.com", "cli", "ai-agent", "claude-skill"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet",
+]
+dependencies = [
+    "playwright>=1.40",
+]
+
+[project.urls]
+Homepage = "https://github.com/daghlny/flight-price-skill"
+Repository = "https://github.com/daghlny/flight-price-skill"
+Issues = "https://github.com/daghlny/flight-price-skill/issues"
+
+[project.scripts]
+flight-price = "flight_price.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["flight_price*"]
+exclude = ["probes*", "data*", "skill*"]
