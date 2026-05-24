@@ -1,21 +1,16 @@
-# flight-price
+# flight-price-skill
 
-一个查询 **Trip.com** 真实可订机票价格的命令行工具，专为 **AI Agent** 设计。
+给 **Claude Code / Codex / Cursor** 等 AI Agent 装上"查真实机票价"的能力。
 
-不像普通比价站给你看的是"营销 from 价"，本工具背后调用的是 Trip.com 的 `FlightListSearch` 接口——每一个返回的价格都对应一个具体、当下可订的航班。
+装好之后，你直接用自然语言跟 Agent 说：
+
+- "帮我查 6/19 端午请 1 天假去杭州，怎么飞最便宜？"
+- "比较一下 6 月每个周末从北京飞东京的往返价"
+- "下周三晚上 6 点之后有什么国航的直飞北京-上海航班？"
+
+Agent 会自动调用本 skill，**返回真实可订航班**（不是普通比价站那种"营销 from 价"），并按你的意图筛选/排序候选给出建议。
 
 > 项目地址：<https://github.com/daghlny/flight-price-skill>
-
-## 能力一览
-
-- ✈️ **单程 / 往返** 任意日期区间扫描
-- 📅 **`--pairs` 一次跑多组日期组合**——AI Agent 自己算好"端午请1天假怎么飞最便宜"的所有候选，一次调用搞定
-- 🎯 **过滤器**：航司白名单 / 黑名单、最大中转数、出发时间窗、仅直飞
-- 📊 **排序**：按价格 / 总时长 / 出发时间
-- 🔄 **回程信息**：往返模式可解码出归途的航班号 + 起飞时间（去程是完整段落详情）
-- 🤖 **JSON 输出**：含跨所有查询的扁平 `flights[]` 排好序数组，Agent 直接取 `[0]` 就是全场最佳
-- 🚥 **每条查询独立 `status` 信号**：`ok` / `no_results` / `timeout`，Agent 知道要不要重试
-- 📖 内置 `help` / `man` / `--version`
 
 ## 一键安装
 
@@ -23,89 +18,86 @@
 curl -fsSL https://raw.githubusercontent.com/daghlny/flight-price-skill/main/install.sh | bash
 ```
 
-脚本会做：
+脚本会：
 
-1. 检查 `python3 >= 3.10` 和 `git`
-2. 克隆仓库到 `~/.flight-price-skill`
-3. 自动建 venv 装依赖（playwright）
-4. 下载 Chromium（一次性，~150MB）
-5. 把 `flight-price` 命令放到 `~/.local/bin/`
+1. 装好底层 CLI（Python + Playwright + Chromium）
+2. **自动检测**是否装了 Claude Code（`~/.claude/`），有的话顺便把 skill 装到 `~/.claude/skills/flight-price/`
+3. 把 `flight-price` 命令放到 `~/.local/bin/`（CLI 也可以独立用）
 
-装完验证：
+装完重启 Claude Code 即可生效，验证：
 
 ```bash
 flight-price --version
 # flight-price 0.4.0
 ```
 
-如果 `~/.local/bin` 不在你的 `PATH`，脚本会提示你加上。
+> Codex / Cursor / 其他 Agent 的装法见 [`skill/README.md`](./skill/README.md)。
 
-> 升级：再跑一次同一行命令即可，幂等。
+## Skill 的能力
 
-## 快速上手
+| 维度 | 支持 |
+|---|---|
+| **数据源** | Trip.com 的 `FlightListSearch` 接口——每个价格对应具体可订航班，非营销价 |
+| **航程类型** | 单程 / 往返 |
+| **日期模式** | 区间扫描、固定回程扫出发、固定 stay 扫日期、**多组合一次扫**（`--pairs`） |
+| **过滤** | 航司白/黑名单、最大中转数、仅直飞、出发时间窗 |
+| **排序** | 价格 / 总时长 / 出发时间 |
+| **回程数据** | 含归途航班号 + 起飞时间（去程含完整段落详情：机场、航站楼、duration、layover） |
+| **输出** | 结构化 JSON（含跨所有查询排好序的扁平 `flights[]`、独立 `status` 信号便于 Agent 重试决策） |
+
+## Agent 怎么用（实际对话示例）
+
+**场景 1：节假日规划**
+
+> 你：帮我查 2026 端午请 1 天假去杭州，怎么飞最便宜？最少待 2 晚。
+
+Agent 会自己枚举出 5 种合法的（出发, 回程）组合，一次调用 skill 拿到全部价格，再综合"性价比/玩的天数/请假代价"给推荐——而不是给你一堆原始数据。
+
+**场景 2：定制化筛选**
+
+> 你：下周从北京去上海，要 18 点之后出发的直飞，最好是国航或东航。
+
+Agent 自动转成 `--depart-after 18:00 --max-stops 0 --airline CA,MU`，返回筛好的候选。
+
+**场景 3：多目的地比价**
+
+> 你：周末从北京出发，HGH、NGB、XMN 哪个最便宜？
+
+Agent 并行扫多个目的地，给出对比表。
+
+## 也可以当作 CLI 直接使用
+
+如果你只想自己敲命令：
 
 ```bash
 # 国内单程：北京 -> 上海，6/1~6/7 区间最便宜
 flight-price BJS SHA --from 2026-06-01 --to 2026-06-07
 
-# 往返：北京 -> 东京，6/6 出发待 2 晚
-flight-price BJS TYO --from 2026-06-06 --to 2026-06-06 --rt --stay 2
+# 往返：北京 -> 东京，6/6 出发待 2 晚，每天列 5 个候选
+flight-price BJS TYO --from 2026-06-06 --to 2026-06-06 --rt --stay 2 --limit 5
 
-# 只看每天最便宜的直飞，按出发时间排
-flight-price BJS SHA --direct --sort depart --limit 3
-
-# 过滤航司 + 时间窗口
+# 过滤航司 + 时间窗
 flight-price BJS SHA --depart-after 18:00 --airline MU,CA --limit 5
 
-# 多组日期组合一次扫（端午 5 种候选）
+# 多组合一次扫（端午 5 种候选）
 flight-price BJS HGH --pairs \
   2026-06-18:2026-06-20,2026-06-18:2026-06-21,\
   2026-06-19:2026-06-21,2026-06-19:2026-06-22,\
   2026-06-20:2026-06-22
 
-# JSON 输出（给 AI Agent / 脚本消费）
+# JSON 输出（默认 limit=5，给脚本消费）
 flight-price BJS TYO --rt --stay 2 --from 2026-06-06 --to 2026-06-06 --json
 ```
 
 完整手册：`flight-price man`
-
-## 作为 AI Agent Skill 使用
-
-仓库自带 `skill/` 目录，里面是给 Agent 用的指令包，已经适配主流软件。
-
-**Claude Code：**
-
-```bash
-mkdir -p ~/.claude/skills
-cp -r ~/.flight-price-skill/skill ~/.claude/skills/flight-price
-```
-
-重启 Claude Code 后，描述里包含"找便宜机票"、"比较机票价格"、"端午怎么去"等触发短语时，Claude 会自动加载这个 skill 并按其指导调用 CLI。
-
-**Codex CLI（OpenAI）/ Cursor / Continue 等**：详见 [`skill/README.md`](./skill/README.md)。
-
-## 输出示例
-
-表格模式（人看）：
-
-```
-BJS → HGH  2026-06-18~2026-06-22  PAIRS (5 RT)  (5 days, 5 options, min=1420 CNY)
-date          return           CNY  type    dep    dur     airline  outbound        return-leg
-2026-06-18    2026-06-20      1480  direct  11:55  2h20m   HU       HU7477          JD5907@21:45
-2026-06-18    2026-06-21      1530  direct  11:55  2h20m   HU       HU7477          CA1701@07:00
-2026-06-19    2026-06-21      1450  direct  21:35  2h35m   CA       CA1732          CA1701@07:00
-2026-06-19    2026-06-22      1460  direct  21:35  2h35m   CA       CA1732          CA8367@07:55
-2026-06-20    2026-06-22      1420  direct  19:35  2h15m   GJ       GJ8988          CA8367@07:55  *
-```
-
-JSON 模式（Agent 用）：每条查询单独 `status`，顶层有跨所有查询排好序的 `flights[]`，详见 `flight-price man` 里 `JSON OUTPUT FORMAT` 章节。
 
 ## 工作原理
 
 - 用 Playwright 跑 headless Chromium 访问 `tw.trip.com/chinaflights/showfarefirst`，监听其内部 `FlightListSearch` / `FlightListSearchSSE` 接口拿到真实运价
 - 多日期 / 多组合并发跑（默认 3 路并行，可调），每条查询 ~10 秒
 - 价格用 `curr=CNY` 参数让 Trip.com 直接返回 CNY，零汇率换算误差
-- 往返模式下，归途的航班号和起飞时间从响应里的 `shortPolicyId` 解码——零额外请求
+- 往返模式下，归途航班号和起飞时间从响应的 `shortPolicyId` 解码——零额外请求
+- Skill 本身就是一个 markdown 文件（[`skill/SKILL.md`](./skill/SKILL.md)），里面告诉 Agent 什么时候调用、参数怎么传、JSON 怎么读、容易踩什么坑
 
 ## 已知限制
 
@@ -117,7 +109,7 @@ JSON 模式（Agent 用）：每条查询单独 `status`，顶层有跨所有查
 
 ## License
 
-MIT。Trip.com 的数据归 Trip.com 所有；本工具仅做合理的浏览器模拟访问，请自行确认你所在司法辖区的使用合规性。
+MIT。Trip.com 数据归 Trip.com 所有；本工具仅做合理的浏览器模拟访问，请自行确认你所在司法辖区的使用合规性。
 
 ## 反馈 / Issues
 

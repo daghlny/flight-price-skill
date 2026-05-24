@@ -11,7 +11,9 @@
 #   4. pip-installs the package + playwright.
 #   5. Downloads the Chromium binary playwright needs.
 #   6. Drops a wrapper script into $HOME/.local/bin/flight-price.
-#   7. Tells you to add ~/.local/bin to PATH if it's not there.
+#   7. If Claude Code is detected (~/.claude/), installs the skill into
+#      ~/.claude/skills/flight-price/ automatically.
+#   8. Tells you to add ~/.local/bin to PATH if it's not there.
 #
 # Idempotent — re-running upgrades to the latest main.
 
@@ -83,6 +85,20 @@ EOF
 chmod +x "$WRAPPER"
 say "Wrapper installed -> $WRAPPER"
 
+# --- skill install (Claude Code) --------------------------------------------
+
+SKILL_INSTALLED=0
+if [ -d "$HOME/.claude" ]; then
+    SKILL_DST="$HOME/.claude/skills/flight-price"
+    say "Detected Claude Code; installing skill -> $SKILL_DST"
+    mkdir -p "$HOME/.claude/skills"
+    rm -rf "$SKILL_DST"
+    cp -r "$INSTALL_DIR/skill" "$SKILL_DST"
+    SKILL_INSTALLED=1
+else
+    say "Claude Code not detected (~/.claude/ absent); skipping skill install"
+fi
+
 # --- PATH hint ---------------------------------------------------------------
 
 if ! command -v flight-price >/dev/null 2>&1 || [ "$(command -v flight-price)" != "$WRAPPER" ]; then
@@ -105,10 +121,18 @@ echo
 printf '%s flight-price installed: %s\n' "$(c_green '✓')" "$INSTALLED_VER"
 printf '   Source:  %s\n' "$INSTALL_DIR"
 printf '   Binary:  %s\n' "$WRAPPER"
+if [ "$SKILL_INSTALLED" = "1" ]; then
+    printf '   Skill:   %s\n' "$HOME/.claude/skills/flight-price"
+    echo
+    echo "Restart Claude Code, then try saying things like:"
+    echo "  '帮我查端午请1天假去杭州怎么飞最便宜'"
+    echo "  '比较 6 月每个周末北京飞东京的往返价'"
+else
+    echo
+    echo "To use as an agent skill (Codex/Cursor/other), see:"
+    echo "  $INSTALL_DIR/skill/README.md"
+fi
 echo
-echo "Try it out:"
-echo "  flight-price BJS SHA --from \$(date -v+7d +%Y-%m-%d) --to \$(date -v+10d +%Y-%m-%d)"
+echo "Or use directly as a CLI:"
+echo "  flight-price BJS SHA --from \$(date -v+7d +%Y-%m-%d 2>/dev/null || date -d '+7 days' +%Y-%m-%d)"
 echo "  flight-price man"
-echo
-echo "Use as an AI agent skill:"
-echo "  mkdir -p ~/.claude/skills && cp -r $INSTALL_DIR/skill ~/.claude/skills/flight-price"
