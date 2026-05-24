@@ -97,8 +97,17 @@ class DayResult:
     status: str = "ok"   # "ok" | "no_results" | "timeout"
 
 
+# Trip.com's URL convention for cabin class (verified via the live search UI):
+#   y = economy, p = premium economy, c = business, f = first
+CABIN_CODES = {"economy": "y", "premium": "p", "business": "c", "first": "f"}
+
+
 def _bootstrap_url(
-    origin: str, dest: str, depart_date: str, return_date: str | None
+    origin: str, dest: str, depart_date: str, return_date: str | None,
+    *,
+    cabin: str = "economy",
+    adults: int = 1,
+    currency: str = "CNY",
 ) -> str:
     """One URL pattern that reliably triggers the flight list endpoint."""
     o, d = origin.upper(), dest.upper()
@@ -111,15 +120,16 @@ def _bootstrap_url(
     aa = _ap.get(d, d)
     trip = "rt" if return_date else "ow"
     rdate = f"&rdate={return_date}" if return_date else ""
+    cabin_code = CABIN_CODES.get(cabin, "y")
     return (
         "https://tw.trip.com/chinaflights/showfarefirst"
         f"?dcity={o.lower()}&acity={d.lower()}"
         f"&ddate={depart_date}{rdate}"
         f"&dairport={da.lower()}&aairport={aa.lower()}"
-        f"&triptype={trip}&class=y"
-        "&lowpricesource=searchform&quantity=1"
+        f"&triptype={trip}&class={cabin_code}"
+        f"&lowpricesource=searchform&quantity={adults}"
         "&searchboxarg=t&nonstoponly=off"
-        "&locale=zh-TW&curr=CNY"
+        f"&locale=zh-TW&curr={currency.upper()}"
     )
 
 
@@ -313,6 +323,9 @@ async def _query_one(
     depart_date: str,
     return_date: str | None,
     *,
+    cabin: str = "economy",
+    adults: int = 1,
+    currency: str = "CNY",
     timeout_seconds: int = 30,
 ) -> DayResult:
     captured: dict[str, str] = {}
@@ -343,7 +356,10 @@ async def _query_one(
     try:
         page = await ctx.new_page()
         page.on("response", lambda r: asyncio.create_task(on_response(r)))
-        url = _bootstrap_url(origin, dest, depart_date, return_date)
+        url = _bootstrap_url(
+            origin, dest, depart_date, return_date,
+            cabin=cabin, adults=adults, currency=currency,
+        )
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
         except Exception:
@@ -388,31 +404,61 @@ async def query_pairs(
     dest: str,
     pairs: Sequence[tuple[str, str | None]],
     *,
+    cabin: str = "economy",
+    adults: int = 1,
+    currency: str = "CNY",
     headless: bool = True,
     concurrency: int = 3,
     timeout_seconds: int = 30,
+    cache: "Cache | None" = None,
 ) -> list[DayResult]:
     """Scan an arbitrary list of (outbound_date, return_date_or_None) pairs.
 
     The OW/RT helpers below are thin wrappers around this. Use this directly
     when the date pairs don't form a contiguous range (e.g. exploring multiple
     holiday-shifted RT combinations in one call).
+
+    If `cache` is provided, hits are served from disk and only misses launch
+    Chromium. Failed queries (timeout/no_results) are NOT cached, so the next
+    call retries them naturally.
     """
-    results: list[DayResult] = [None] * len(pairs)  # type: ignore
+    results: list[DayResult | None] = [None] * len(pairs)
+    miss_indices: list[int] = []
+    miss_pairs: list[tuple[str, str | None]] = []
+
+    if cache is not None:
+        for i, (dep, ret) in enumerate(pairs):
+            hit = cache.get(origin, dest, dep, ret, cabin, adults, currency)
+            if hit is not None:
+                results[i] = hit
+            else:
+                miss_indices.append(i)
+                miss_pairs.append((dep, ret))
+    else:
+        miss_indices = list(range(len(pairs)))
+        miss_pairs = list(pairs)
+
+    if not miss_pairs:
+        return [r for r in results if r is not None]
+
     sem = asyncio.Semaphore(concurrency)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=headless)
         try:
-            async def worker(idx: int, dep: str, ret: str | None) -> None:
+            async def worker(local_idx: int, dep: str, ret: str | None) -> None:
                 async with sem:
-                    results[idx] = await _query_one(
+                    r = await _query_one(
                         browser, origin, dest, dep, ret,
+                        cabin=cabin, adults=adults, currency=currency,
                         timeout_seconds=timeout_seconds,
                     )
+                    results[miss_indices[local_idx]] = r
+                    if cache is not None:
+                        cache.put(r, origin, dest, dep, ret, cabin, adults, currency)
 
             await asyncio.gather(
-                *[worker(i, dep, ret) for i, (dep, ret) in enumerate(pairs)]
+                *[worker(i, dep, ret) for i, (dep, ret) in enumerate(miss_pairs)]
             )
         finally:
             await browser.close()
@@ -425,16 +471,22 @@ async def query_oneway_range(
     dest: str,
     dates: Sequence[str],
     *,
+    cabin: str = "economy",
+    adults: int = 1,
+    currency: str = "CNY",
     headless: bool = True,
     concurrency: int = 3,
     timeout_seconds: int = 30,
+    cache: "Cache | None" = None,
 ) -> list[DayResult]:
     pairs: list[tuple[str, str | None]] = [(d, None) for d in dates]
     return await query_pairs(
         origin, dest, pairs,
+        cabin=cabin, adults=adults, currency=currency,
         headless=headless,
         concurrency=concurrency,
         timeout_seconds=timeout_seconds,
+        cache=cache,
     )
 
 
@@ -445,9 +497,13 @@ async def query_roundtrip_range(
     *,
     stay_nights: int | None = None,
     return_date: str | None = None,
+    cabin: str = "economy",
+    adults: int = 1,
+    currency: str = "CNY",
     headless: bool = True,
     concurrency: int = 3,
     timeout_seconds: int = 30,
+    cache: "Cache | None" = None,
 ) -> list[DayResult]:
     """One of `stay_nights` or `return_date` must be provided."""
     if stay_nights is None and return_date is None:
@@ -461,7 +517,9 @@ async def query_roundtrip_range(
             pairs.append((dep, ret))
     return await query_pairs(
         origin, dest, pairs,
+        cabin=cabin, adults=adults, currency=currency,
         headless=headless,
         concurrency=concurrency,
         timeout_seconds=timeout_seconds,
+        cache=cache,
     )

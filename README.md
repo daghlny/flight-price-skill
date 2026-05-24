@@ -40,10 +40,13 @@ flight-price --version
 | **数据源** | Trip.com 的 `FlightListSearch` 接口——每个价格对应具体可订航班，非营销价 |
 | **航程类型** | 单程 / 往返 |
 | **日期模式** | 区间扫描、固定回程扫出发、固定 stay 扫日期、**多组合一次扫**（`--pairs`） |
+| **舱位 / 乘客 / 货币** | `--cabin economy\|premium\|business\|first`、`--adults N`、`--currency USD/JPY/HKD/CNY/...` |
 | **过滤** | 航司白/黑名单、最大中转数、仅直飞、出发时间窗 |
 | **排序** | 价格 / 总时长 / 出发时间 |
 | **回程数据** | 含归途航班号 + 起飞时间（去程含完整段落详情：机场、航站楼、duration、layover） |
 | **输出** | 结构化 JSON（含跨所有查询排好序的扁平 `flights[]`、独立 `status` 信号便于 Agent 重试决策） |
+| **缓存** | `--cache` 可选开启（默认关），Agent 迭代调参时秒回，详见 `flight-price man` |
+| **自检** | `flight-price doctor` 一条命令排查环境/网络/接口问题 |
 
 ## Agent 怎么用（实际对话示例）
 

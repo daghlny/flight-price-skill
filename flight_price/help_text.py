@@ -17,11 +17,15 @@ SYNOPSIS
     flight-price ORIGIN DEST [--from DATE] [--to DATE]
                  [--rt (--stay N | --return-date DATE)]
                  [--pairs OUT[:RET][,OUT[:RET]...]]
+                 [--cabin economy|premium|business|first]
+                 [--adults N] [--currency CODE]
                  [--limit N|all] [--sort {{price,duration,depart}}]
                  [--direct] [--max-stops N]
                  [--airline LIST] [--exclude-airline LIST]
                  [--depart-after HH:MM] [--depart-before HH:MM]
+                 [--cache] [--cache-ttl SECONDS]
                  [--concurrency N] [--json] [--headed]
+    flight-price doctor [--json]
     flight-price help
     flight-price man
     flight-price --version
@@ -92,6 +96,20 @@ EXPLICIT DATE PAIRS
         agents that compute their own date combinations from a prompt
         and want one round-trip to the tool.
 
+TRIP COMPOSITION
+    --cabin {{economy,premium,business,first}}
+        Cabin class. Maps to Trip.com's `class` URL param:
+        economy=y, premium=p, business=c, first=f. Default: economy.
+
+    --adults N
+        Number of adult passengers. Default: 1. Trip.com prices scale
+        roughly linearly with passenger count for cash fares.
+
+    --currency CODE
+        Currency for prices, ISO 4217 (CNY, USD, JPY, HKD, EUR, GBP,
+        SGD, KRW, TWD, AUD, ...). Default: CNY. Trip.com returns
+        native values without an additional conversion step on our end.
+
 FILTER OPTIONS
     --direct
         Shortcut for `--max-stops 0` — show only itineraries with no
@@ -135,6 +153,18 @@ RANKING OPTIONS
         How to rank itineraries within a date. Default: price (ascending).
         `duration` ranks by outbound total trip time; `depart` ranks by
         outbound depart time (earliest first).
+
+CACHE OPTIONS
+    --cache
+        Cache raw query results to $XDG_CACHE_HOME/flight-price/
+        (~/.cache/flight-price/ by default), keyed on
+        (origin, dest, depart, return, cabin, adults, currency).
+        OFF by default. See CACHE NOTES below for the trade-off.
+
+    --cache-ttl SECONDS
+        Lifetime of cache entries in seconds. Default: 600 (10 min).
+        Only meaningful with --cache. On read, entries older than TTL
+        are evicted and counted as misses.
 
 PERFORMANCE OPTIONS
     --concurrency N
@@ -183,10 +213,24 @@ EXAMPLES
     # Agent-style: 5 hand-picked RT combos in one call, ranked across all
     flight-price BJS HGH --pairs 2026-06-18:2026-06-20,2026-06-19:2026-06-21,2026-06-19:2026-06-22,2026-06-20:2026-06-22 --json
 
+    # Business class for 2 adults, prices in USD
+    flight-price BJS NRT --rt --stay 5 --from 2026-08-01 --to 2026-08-01 --cabin business --adults 2 --currency USD
+
+    # Agent loop: enable --cache so refining filters is instant
+    flight-price BJS TYO --rt --stay 2 --from 2026-06-06 --to 2026-06-12 --cache --json --limit 10
+    flight-price BJS TYO --rt --stay 2 --from 2026-06-06 --to 2026-06-12 --cache --json --airline CA,MU
+    flight-price BJS TYO --rt --stay 2 --from 2026-06-06 --to 2026-06-12 --cache --json --max-stops 0
+
+    # Something's broken: run the self-check first
+    flight-price doctor
+
 JSON OUTPUT FORMAT (--json)
     Top-level keys:
         origin, dest      query inputs (echoed back)
         mode              "OW" | "RT" | "PAIRS"
+        cabin             "economy" | "premium" | "business" | "first"
+        adults            adult passenger count
+        currency          ISO 4217 code in which prices are quoted
         date_from/to      min/max date seen in the query
         filters           the filters that were applied
         sort, limit       ranking/cap that were applied
@@ -246,6 +290,58 @@ OUTPUT FORMAT
     The row(s) with the lowest price across the entire result set are
     marked with " *" at the end.
 
+CACHE NOTES
+    Cache is OFF by default. This is deliberate: the headline use case
+    is "tell me the current flight price", and a stale answer to that
+    question is worse than a slow fresh one.
+
+    Enable --cache when:
+      * An AI agent is iterating on the same date range with different
+        filters/sorts/limits (typical agent loop). The first call is a
+        full miss; the second/third/Nth calls hit and return in ~50ms.
+      * You're running multiple comparison queries in a short session
+        and want repeated runs to be fast.
+      * You're debugging the output schema and don't care if prices
+        are 10 minutes stale.
+
+    Leave it off (the default) when:
+      * You're about to book — get THE price, not yesterday's.
+      * Running a price-tracking cron — every run should be a fresh
+        snapshot.
+      * It's been a while since you last queried this OD and you want
+        today's prices.
+
+    Cache details:
+      * Location: $XDG_CACHE_HOME/flight-price/ (~/.cache/flight-price/
+        on Linux/macOS by default). Each query is one JSON file named
+        by a short hash of its key.
+      * Key includes: origin, dest, depart-date, return-date, cabin,
+        adults, currency. Does NOT include filters (--airline,
+        --max-stops, etc.) — those are applied client-side after the
+        cache layer, so different filters on the same raw query share
+        a cache entry.
+      * Failed queries (`status=timeout` or `no_results`) are NEVER
+        cached, so the next call retries naturally.
+      * To wipe: `rm -rf ~/.cache/flight-price/`. No other state.
+
+DOCTOR
+    flight-price doctor [--json]
+        Run a self-check covering everything between you and a working
+        query: python version, package install, playwright import,
+        Chromium binary, DNS + HTTPS to tw.trip.com, and an actual
+        end-to-end BJS-SHA test query. Each step shows ✓ / ✗ with a
+        remediation hint on failure.
+
+        Use this FIRST when something stops working — most failures
+        are environmental (missing Chromium after a `brew update`,
+        regional block, expired cert) and not bugs in flight-price.
+
+        Exit 0 if all checks pass, 1 if any fail.
+
+        With --json, emits structured output suitable for an AI agent
+        to consume after a failed query: it tells the agent whether
+        to retry, install something, or report a real bug.
+
 DATA SOURCE NOTES
     Data comes from tw.trip.com (Trip.com's Taiwan site) with `curr=CNY`,
     which returns prices natively in CNY without conversion. No login is
@@ -275,19 +371,21 @@ DATA SOURCE NOTES
         HU  Hainan Airlines
 
 LIMITATIONS
-    - 1 adult passenger, economy class — not yet configurable.
-    - Multi-city itineraries not supported.
+    - Multi-city itineraries (A→B→C) not supported.
     - No historical price tracking or price-drop alerts.
     - Round-trip return-leg detail is limited to flight numbers + depart
       time (no transit airport, no arrive time, no terminal info) — see
       DATA SOURCE NOTES.
+    - Children/infant passengers not yet parameterized (use --adults
+      for now; child/infant pricing differs in reality).
 
 EXIT STATUS
     0   success
     2   invalid arguments
 
 SEE ALSO
-    flight-price help    Short usage and option summary
+    flight-price help        Short usage and option summary
+    flight-price doctor      Self-check (env, network, end-to-end query)
 """
 
 

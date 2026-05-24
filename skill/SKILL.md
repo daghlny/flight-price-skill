@@ -1,7 +1,7 @@
 ---
 name: flight-price
 description: This skill should be used when the user asks to "find cheap flights", "compare flight prices across dates", "find the cheapest weekend trip", "scan flight prices for a holiday", "比较机票价格", "查机票", "找便宜的机票", or any request that involves discovering flight prices across multiple dates or itinerary combinations. The skill drives the `flight-price` CLI, which queries Trip.com for bookable inventory (not marketing "from" prices) and is designed to be invoked by AI agents with structured JSON output.
-version: 0.4.0
+version: 0.5.0
 ---
 
 # flight-price
@@ -19,7 +19,7 @@ Use this skill whenever the user's request involves any of:
 
 Don't use this for: hotel pricing, ground transportation, visa info, airline schedules without prices.
 
-## Installation check
+## Installation check + self-diagnostic
 
 Before invoking the CLI, verify it's installed:
 
@@ -29,6 +29,14 @@ which flight-price && flight-price --version
 
 If missing, the user must install it. Point them at: https://github.com/daghlny/flight-price-skill (one-line installer in the README).
 
+**If a query fails with timeout / unexpected error**, run the built-in self-check:
+
+```bash
+flight-price doctor --json
+```
+
+It checks (in order): python version, package install, playwright import, Chromium binary, DNS/HTTPS to tw.trip.com, and a live BJS-SHA query. Each failed check returns a `hint` field with the fix. Tell the user to follow the hint of the first failed check — fixing earlier ones often clears later ones automatically.
+
 ## Recommended invocation pattern for agents
 
 **Always pass `--json`.** The default human-table output is harder to parse; JSON is structured and stable.
@@ -36,6 +44,10 @@ If missing, the user must install it. Point them at: https://github.com/daghlny/
 **Always read `flights[]`** (the top-level flat array) rather than walking `results[].options[]`. It's pre-ranked across all queries.
 
 **Always check `results[i].status`** for each query — distinguishes `"ok"` / `"no_results"` / `"timeout"`. Retry only `"timeout"` ones.
+
+**Enable `--cache` when you're going to iterate.** If the conversation is heading toward "OK, now narrow it down to direct flights / specific airlines / departing after 6pm", run the FIRST call with `--cache`. Subsequent refinements on the same dates will be near-instant (the cache key excludes filters, so different `--airline` / `--max-stops` / `--sort` arguments on the same dates all share the same cached raw response). Default TTL is 10 minutes, which is well-suited to a single agent session.
+
+**Do NOT use `--cache` when** the user is about to book (they need THE current price), or when running a periodic monitor (every run should be fresh).
 
 ### Single-date or contiguous-range scan
 
@@ -70,11 +82,13 @@ flight-price ORIGIN DEST [date selection] [filters] [ranking] [output]
 | Date range | `--from YYYY-MM-DD` / `--to YYYY-MM-DD` | default: today / from + 7 |
 | Round-trip | `--rt --stay N` or `--rt --return-date YYYY-MM-DD` | RT mode |
 | Explicit pairs | `--pairs OUT[:RET][,OUT[:RET]...]` | mutually exclusive with above |
+| Trip composition | `--cabin {economy,premium,business,first}`, `--adults N`, `--currency CODE` | default: economy / 1 / CNY |
 | Filters | `--direct`, `--max-stops N`, `--airline CA,MU`, `--exclude-airline IJ`, `--depart-after HH:MM`, `--depart-before HH:MM` | apply to OUTBOUND leg |
 | Ranking | `--sort {price,duration,depart}`, `--limit N\|all` | default sort=price, limit=1 (table) / 5 (--json) |
+| Cache | `--cache`, `--cache-ttl SECONDS` | opt-in; enable for agent loops, leave off for booking |
 | Perf | `--concurrency N` | default 3, raise to 5-8 for big scans |
 | Output | `--json` | structured, agent-friendly |
-| Auxiliary | `flight-price help \| man \| --version` | docs |
+| Auxiliary | `flight-price doctor \| help \| man \| --version` | docs + self-check |
 
 ORIGIN / DEST accept either 3-letter IATA city codes (BJS = any Beijing airport, SHA = any Shanghai, TYO = any Tokyo) or specific airport codes (PEK, PVG, NRT, HND).
 
@@ -146,11 +160,10 @@ Each `flights[i]` (and `options[j]`) is a `FlightOption`:
 
 ## Known limitations the agent should be aware of
 
-- **1 adult, economy** is hardcoded. Don't try to pass a `--passengers` or `--cabin` flag — they don't exist.
 - **Return-leg detail is partial**: for RT, only return flight numbers + depart times are surfaced. Transit airport, arrive time, and durations of the return leg are NOT in the response (they live behind a separate API call the CLI doesn't make).
-- **Per-query cost is ~10 seconds** (one Chromium navigation each). A 30-date scan takes ~100s with default concurrency 3.
-- **Currency is always CNY**. There is no `--currency` flag yet.
-- **No persistent cache.** Re-running the same query re-hits Trip.com. If you're iterating, prefer broadening one call (e.g. `--limit all`) over many small calls.
+- **Per-query cost is ~10 seconds** (one Chromium navigation each). A 30-date scan takes ~100s with default concurrency 3. With `--cache`, subsequent same-key calls are ~50ms.
+- **Children/infant passengers not parameterized** — only `--adults N`. For family pricing the actual booking will differ.
+- **Cache is OFF by default** — opt in via `--cache` for agent iteration loops.
 
 ## Common patterns
 

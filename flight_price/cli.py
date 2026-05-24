@@ -24,7 +24,9 @@ from datetime import date, time, timedelta
 
 from . import __version__
 from .help_text import MAN_PAGE, HELP_HINTS
+from .cache import Cache
 from .trip import (
+    CABIN_CODES,
     DayResult,
     FlightOption,
     query_oneway_range,
@@ -191,6 +193,34 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--sort", choices=("price", "duration", "depart"), default="price",
         help="rank itineraries by this key (default: price)",
+    )
+
+    # Trip composition
+    p.add_argument(
+        "--cabin", choices=tuple(CABIN_CODES.keys()), default="economy",
+        help="cabin class (default: economy)",
+    )
+    p.add_argument(
+        "--adults", type=int, default=1,
+        help="number of adult passengers (default: 1)",
+    )
+    p.add_argument(
+        "--currency", default="CNY",
+        help="currency for prices, ISO 4217 code (default: CNY). "
+             "Trip.com supports e.g. USD, JPY, HKD, EUR, GBP, SGD, KRW.",
+    )
+
+    # Cache (default OFF — see man page CACHE NOTES for the trade-off)
+    p.add_argument(
+        "--cache", action="store_true",
+        help="cache raw query results to ~/.cache/flight-price/ (default: off). "
+             "Enable when iterating on filters/sort/limit for the same dates; "
+             "leave off when you need real-time prices. See `man` for details.",
+    )
+    p.add_argument(
+        "--cache-ttl", type=int, default=600,
+        help="cache lifetime in seconds (default: 600 = 10 min). "
+             "Only meaningful with --cache.",
     )
 
     # Perf / IO
@@ -451,6 +481,10 @@ def _try_subcommand(argv: list[str]) -> int | None:
                 pass
         sys.stdout.write(MAN_PAGE)
         return 0
+    if cmd == "doctor":
+        from .doctor import run as _doctor_run
+        as_json = "--json" in argv[1:]
+        return _doctor_run(as_json=as_json)
     return None
 
 
@@ -465,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
     # several options to choose from, humans want the one-line answer).
     if args.limit is None:
         args.limit = 5 if args.json else 1
+
+    cache = Cache(ttl_seconds=args.cache_ttl) if args.cache else None
 
     # --pairs is mutually exclusive with the date-range / RT flags.
     if args.pairs is not None:
@@ -502,8 +538,10 @@ def main(argv: list[str] | None = None) -> int:
         rows = asyncio.run(
             query_pairs(
                 args.origin, args.dest, pairs,
+                cabin=args.cabin, adults=args.adults, currency=args.currency,
                 headless=not args.headed,
                 concurrency=args.concurrency,
+                cache=cache,
             )
         )
     else:
@@ -537,8 +575,10 @@ def main(argv: list[str] | None = None) -> int:
                     query_roundtrip_range(
                         args.origin, args.dest, dates,
                         return_date=args.return_date.isoformat(),
+                        cabin=args.cabin, adults=args.adults, currency=args.currency,
                         headless=not args.headed,
                         concurrency=args.concurrency,
+                        cache=cache,
                     )
                 )
             else:
@@ -547,8 +587,10 @@ def main(argv: list[str] | None = None) -> int:
                     query_roundtrip_range(
                         args.origin, args.dest, dates,
                         stay_nights=args.stay,
+                        cabin=args.cabin, adults=args.adults, currency=args.currency,
                         headless=not args.headed,
                         concurrency=args.concurrency,
+                        cache=cache,
                     )
                 )
         else:
@@ -556,8 +598,10 @@ def main(argv: list[str] | None = None) -> int:
             rows = asyncio.run(
                 query_oneway_range(
                     args.origin, args.dest, dates,
+                    cabin=args.cabin, adults=args.adults, currency=args.currency,
                     headless=not args.headed,
                     concurrency=args.concurrency,
+                    cache=cache,
                 )
             )
 
@@ -576,6 +620,9 @@ def main(argv: list[str] | None = None) -> int:
                 "origin": args.origin.upper(),
                 "dest": args.dest.upper(),
                 "mode": mode,
+                "cabin": args.cabin,
+                "adults": args.adults,
+                "currency": args.currency.upper(),
                 "date_from": df.isoformat(),
                 "date_to": dt_.isoformat(),
                 "stay_nights": args.stay if args.rt else None,
